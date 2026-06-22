@@ -1,10 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { Switch } from '@/components/ui/switch';
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, RefreshCw } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { DeviceSelection, SelectedDevices } from '@/components/DeviceSelection';
 import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
+
+export interface ExcludedSystemAudioApp {
+  root_bundle_id: string;
+  display_name: string;
+}
+
+export interface SystemAudioSourceApp {
+  display_name: string;
+  root_bundle_id: string | null;
+  process_bundle_id: string | null;
+  pid: number;
+  process_object_id: number;
+  is_running_output: boolean;
+  can_exclude: boolean;
+}
 
 export interface RecordingPreferences {
   save_folder: string;
@@ -12,11 +27,18 @@ export interface RecordingPreferences {
   file_format: string;
   preferred_mic_device: string | null;
   preferred_system_device: string | null;
+  system_audio_backend?: string | null;
+  excluded_system_audio_apps: ExcludedSystemAudioApp[];
 }
 
 interface RecordingSettingsProps {
   onSave?: (preferences: RecordingPreferences) => void;
 }
+
+const normalizePreferences = (prefs: RecordingPreferences): RecordingPreferences => ({
+  ...prefs,
+  excluded_system_audio_apps: prefs.excluded_system_audio_apps ?? []
+});
 
 export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const [preferences, setPreferences] = useState<RecordingPreferences>({
@@ -24,18 +46,47 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     auto_save: true,
     file_format: 'mp4',
     preferred_mic_device: null,
-    preferred_system_device: null
+    preferred_system_device: null,
+    system_audio_backend: null,
+    excluded_system_audio_apps: []
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showRecordingNotification, setShowRecordingNotification] = useState(true);
+  const [systemAudioSources, setSystemAudioSources] = useState<SystemAudioSourceApp[]>([]);
+  const [loadingSystemAudioSources, setLoadingSystemAudioSources] = useState(false);
+
+  const loadSystemAudioSources = React.useCallback(async () => {
+    setLoadingSystemAudioSources(true);
+    try {
+      const sources = await invoke<SystemAudioSourceApp[]>('list_system_audio_source_apps_command');
+      const dedupedSources = new Map<string, SystemAudioSourceApp>();
+
+      sources.forEach(source => {
+        const key = source.root_bundle_id
+          ?? source.process_bundle_id
+          ?? `${source.display_name}:${source.pid}:${source.process_object_id}`;
+
+        if (!dedupedSources.has(key)) {
+          dedupedSources.set(key, source);
+        }
+      });
+
+      setSystemAudioSources(Array.from(dedupedSources.values()));
+    } catch (error) {
+      console.error('Failed to load system audio sources:', error);
+      toast.error('Failed to load system audio sources');
+    } finally {
+      setLoadingSystemAudioSources(false);
+    }
+  }, []);
 
   // Load recording preferences on component mount
   useEffect(() => {
     const loadPreferences = async () => {
       try {
         const prefs = await invoke<RecordingPreferences>('get_recording_preferences');
-        setPreferences(prefs);
+        setPreferences(normalizePreferences(prefs));
       } catch (error) {
         console.error('Failed to load recording preferences:', error);
         // If loading fails, get default folder path
@@ -52,6 +103,10 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
 
     loadPreferences();
   }, []);
+
+  useEffect(() => {
+    loadSystemAudioSources();
+  }, [loadSystemAudioSources]);
 
   // Load recording notification preference
   useEffect(() => {
@@ -96,6 +151,41 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     });
   };
 
+  const handleSystemAudioExclusionToggle = async (
+    source: Pick<SystemAudioSourceApp, 'root_bundle_id' | 'display_name'>,
+    enabled: boolean
+  ) => {
+    if (!source.root_bundle_id) {
+      toast.error('This app cannot be excluded');
+      return;
+    }
+
+    const currentExcludedApps = preferences.excluded_system_audio_apps ?? [];
+    const nextExcludedApps = enabled
+      ? [
+          ...currentExcludedApps.filter(app => app.root_bundle_id !== source.root_bundle_id),
+          {
+            root_bundle_id: source.root_bundle_id,
+            display_name: source.display_name || source.root_bundle_id
+          }
+        ]
+      : currentExcludedApps.filter(app => app.root_bundle_id !== source.root_bundle_id);
+
+    const newPreferences = {
+      ...preferences,
+      excluded_system_audio_apps: nextExcludedApps
+    };
+
+    setPreferences(newPreferences);
+    await savePreferences(newPreferences);
+
+    await Analytics.track('system_audio_app_exclusion_toggled', {
+      enabled: enabled.toString(),
+      app_bundle_id: source.root_bundle_id,
+      app_display_name: source.display_name || source.root_bundle_id
+    });
+  };
+
   const handleOpenFolder = async () => {
     try {
       await invoke('open_recordings_folder');
@@ -127,15 +217,10 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       await invoke('set_recording_preferences', { preferences: prefs });
       onSave?.(prefs);
 
-      // Show success toast with device details
-      const micDevice = prefs.preferred_mic_device || 'Default';
-      const systemDevice = prefs.preferred_system_device || 'Default';
-      toast.success("Device preferences saved", {
-        description: `Microphone: ${micDevice}, System Audio: ${systemDevice}`
-      });
+      toast.success("Recording preferences saved");
     } catch (error) {
       console.error('Failed to save recording preferences:', error);
-      toast.error("Failed to save device preferences", {
+      toast.error("Failed to save recording preferences", {
         description: error instanceof Error ? error.message : String(error)
       });
     } finally {
@@ -151,6 +236,18 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       </div>
     );
   }
+
+  const excludedApps = preferences.excluded_system_audio_apps ?? [];
+  const excludedBundleIds = new Set(excludedApps.map(app => app.root_bundle_id));
+  const visibleSourceBundleIds = new Set(
+    systemAudioSources
+      .map(source => source.root_bundle_id)
+      .filter((bundleId): bundleId is string => Boolean(bundleId))
+  );
+  const savedOnlyExcludedApps = excludedApps.filter(
+    app => !visibleSourceBundleIds.has(app.root_bundle_id)
+  );
+  const hasSystemAudioRows = systemAudioSources.length > 0 || savedOnlyExcludedApps.length > 0;
 
   return (
     <div className="space-y-6">
@@ -244,6 +341,86 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
               onDeviceChange={handleDeviceChange}
               disabled={saving}
             />
+          </div>
+        </div>
+      </div>
+
+      {/* System Audio App Exclusions */}
+      <div className="space-y-4">
+        <div className="border-t pt-6">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h4 className="text-base font-medium text-gray-900">System Audio App Exclusions</h4>
+              <p className="text-sm text-gray-600 mt-1">
+                Excluded apps keep playing locally but are left out of system audio capture.
+              </p>
+            </div>
+            <button
+              onClick={loadSystemAudioSources}
+              disabled={loadingSystemAudioSources}
+              className="flex shrink-0 items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`w-4 h-4 ${loadingSystemAudioSources ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
+
+          <div className="border rounded-lg bg-gray-50 divide-y">
+            {!hasSystemAudioRows && (
+              <div className="p-4 text-sm text-gray-600">
+                No active system audio sources detected.
+              </div>
+            )}
+
+            {systemAudioSources.map(source => {
+              const bundleId = source.root_bundle_id;
+              const isExcluded = bundleId ? excludedBundleIds.has(bundleId) : false;
+
+              return (
+                <div
+                  key={`${bundleId ?? source.process_bundle_id ?? source.display_name}:${source.pid}:${source.process_object_id}`}
+                  className="flex items-center justify-between gap-4 p-4"
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium text-gray-900 truncate">
+                      {source.display_name}
+                    </div>
+                    <div className="text-xs text-gray-500 break-all">
+                      {bundleId ?? source.process_bundle_id ?? 'No bundle identifier'}
+                    </div>
+                  </div>
+                  <Switch
+                    checked={isExcluded}
+                    onCheckedChange={(enabled) => handleSystemAudioExclusionToggle(source, enabled)}
+                    disabled={saving || !source.can_exclude || !bundleId}
+                  />
+                </div>
+              );
+            })}
+
+            {savedOnlyExcludedApps.map(app => (
+              <div
+                key={app.root_bundle_id}
+                className="flex items-center justify-between gap-4 p-4"
+              >
+                <div className="min-w-0">
+                  <div className="font-medium text-gray-900 truncate">
+                    {app.display_name}
+                  </div>
+                  <div className="text-xs text-gray-500 break-all">
+                    {app.root_bundle_id}
+                  </div>
+                </div>
+                <Switch
+                  checked
+                  onCheckedChange={(enabled) => handleSystemAudioExclusionToggle({
+                    root_bundle_id: app.root_bundle_id,
+                    display_name: app.display_name
+                  }, enabled)}
+                  disabled={saving}
+                />
+              </div>
+            ))}
           </div>
         </div>
       </div>

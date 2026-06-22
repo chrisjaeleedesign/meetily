@@ -113,16 +113,20 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     let mut manager = RecordingManager::new();
 
     // Load recording preferences to get auto_save AND device preferences
-    let (auto_save, preferred_mic_name, preferred_system_name) =
+    let (auto_save, preferred_mic_name, preferred_system_name, excluded_system_audio_app_bundle_ids) =
         match super::recording_preferences::load_recording_preferences(&app).await {
             Ok(prefs) => {
                 info!("📋 Loaded recording preferences: auto_save={}, preferred_mic={:?}, preferred_system={:?}",
                       prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device);
-                (prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device)
+                let excluded_apps = prefs.excluded_system_audio_apps
+                    .iter()
+                    .map(|app| app.root_bundle_id.clone())
+                    .collect::<Vec<_>>();
+                (prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device, excluded_apps)
             }
             Err(e) => {
                 warn!("Failed to load recording preferences, using defaults: {}", e);
-                (true, None, None)
+                (true, None, None, Vec::new())
             }
         };
 
@@ -234,7 +238,12 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
 
     // Start recording with resolved devices (replaces start_recording_with_defaults_and_auto_save call)
     let transcription_receiver = manager
-        .start_recording(microphone_device, system_device, auto_save)
+        .start_recording(
+            microphone_device,
+            system_device,
+            auto_save,
+            excluded_system_audio_app_bundle_ids,
+        )
         .await
         .map_err(|e| format!("Failed to start recording: {}", e))?;
 
@@ -376,14 +385,18 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     let mut manager = RecordingManager::new();
 
     // Load recording preferences to check auto_save setting
-    let auto_save = match super::recording_preferences::load_recording_preferences(&app).await {
+    let (auto_save, excluded_system_audio_app_bundle_ids) = match super::recording_preferences::load_recording_preferences(&app).await {
         Ok(prefs) => {
             info!("📋 Loaded recording preferences: auto_save={}", prefs.auto_save);
-            prefs.auto_save
+            let excluded_apps = prefs.excluded_system_audio_apps
+                .iter()
+                .map(|app| app.root_bundle_id.clone())
+                .collect::<Vec<_>>();
+            (prefs.auto_save, excluded_apps)
         }
         Err(e) => {
             warn!("Failed to load recording preferences, defaulting to auto_save=true: {}", e);
-            true // Default to saving if preferences can't be loaded
+            (true, Vec::new()) // Default to saving if preferences can't be loaded
         }
     };
 
@@ -405,7 +418,12 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 
     // Start recording with specified devices and auto_save setting
     let transcription_receiver = manager
-        .start_recording(mic_device, system_device, auto_save)
+        .start_recording(
+            mic_device,
+            system_device,
+            auto_save,
+            excluded_system_audio_app_bundle_ids,
+        )
         .await
         .map_err(|e| format!("Failed to start recording: {}", e))?;
 

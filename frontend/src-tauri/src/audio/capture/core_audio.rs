@@ -14,7 +14,7 @@ use ringbuf::{
 use log::{error, info, warn};
 
 #[cfg(target_os = "macos")]
-use cidre::{arc, av, cat, cf, core_audio as ca, os};
+use cidre::{arc, av, cat, cf, core_audio as ca, ns, os};
 
 /// Waker state for async polling
 struct WakerState {
@@ -55,6 +55,11 @@ struct AudioContext {
 impl CoreAudioCapture {
     /// Create a new Core Audio capture for system audio
     pub fn new() -> Result<Self> {
+        Self::new_excluding_processes(&[])
+    }
+
+    /// Create a new Core Audio capture for system audio, excluding Core Audio process object IDs.
+    pub fn new_excluding_processes(excluded_process_object_ids: &[u32]) -> Result<Self> {
         info!("🎙️ CoreAudio: Starting Core Audio capture initialization...");
 
         // Note: Audio Capture permission (NSAudioCaptureUsageDescription) is required for macOS 14.4+
@@ -85,10 +90,20 @@ impl CoreAudioCapture {
         // When using a tap, the tap provides all the audio we need
         // Including both the tap AND the device creates duplicate audio (echo issue)
 
-        // Create process tap with mono global tap, excluding no processes
+        // Create process tap with mono global tap, excluding selected processes
         // Note: Mono tap is more reliable for system audio capture on macOS
-        info!("🎙️ CoreAudio: Creating process tap (global mono tap)...");
-        let tap_desc = ca::TapDesc::with_mono_global_tap_excluding_processes(&cidre::ns::Array::new());
+        let excluded_process_numbers: Vec<arc::R<ns::Number>> = excluded_process_object_ids
+            .iter()
+            .copied()
+            .map(ns::Number::with_u32)
+            .collect();
+        let excluded_processes = ns::Array::from_slice_retained(&excluded_process_numbers);
+        info!(
+            "🎙️ CoreAudio: Creating process tap (global mono tap), excluding {} process(es): {:?}",
+            excluded_process_object_ids.len(),
+            excluded_process_object_ids
+        );
+        let tap_desc = ca::TapDesc::with_mono_global_tap_excluding_processes(&excluded_processes);
         let tap = tap_desc.create_process_tap()
             .map_err(|e| {
                 error!("❌ CoreAudio: Failed to create process tap: {:?}", e);
@@ -390,6 +405,10 @@ pub struct CoreAudioStream;
 #[cfg(not(target_os = "macos"))]
 impl CoreAudioCapture {
     pub fn new() -> Result<Self> {
+        Err(anyhow::anyhow!("Core Audio is only supported on macOS"))
+    }
+
+    pub fn new_excluding_processes(_excluded_process_object_ids: &[u32]) -> Result<Self> {
         Err(anyhow::anyhow!("Core Audio is only supported on macOS"))
     }
 

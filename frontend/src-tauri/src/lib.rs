@@ -710,6 +710,7 @@ pub fn run() {
             // System audio capture commands
             audio::system_audio_commands::start_system_audio_capture_command,
             audio::system_audio_commands::list_system_audio_devices_command,
+            audio::system_audio_commands::list_system_audio_source_apps_command,
             audio::system_audio_commands::check_system_audio_permissions_command,
             audio::system_audio_commands::start_system_audio_monitoring,
             audio::system_audio_commands::stop_system_audio_monitoring,

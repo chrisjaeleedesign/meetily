@@ -3,6 +3,20 @@ use std::time::{Duration, Instant};
 
 #[cfg(target_os = "macos")]
 use cidre::{core_audio as ca, os};
+use serde::Serialize;
+#[cfg(target_os = "macos")]
+use std::collections::HashSet;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemAudioSourceApp {
+    pub display_name: String,
+    pub root_bundle_id: Option<String>,
+    pub process_bundle_id: Option<String>,
+    pub pid: i32,
+    pub process_object_id: u32,
+    pub is_running_output: bool,
+    pub can_exclude: bool,
+}
 
 /// Event types for system audio detection
 #[derive(Debug, Clone)]
@@ -355,6 +369,120 @@ impl MacOSSystemAudioDetector {
 }
 
 #[cfg(target_os = "macos")]
+pub fn list_system_audio_source_apps() -> Vec<SystemAudioSourceApp> {
+    match ca::System::processes() {
+        Ok(processes) => {
+            let mut apps = Vec::new();
+            for process in processes {
+                let is_running_output = process.is_running_output().unwrap_or(false);
+                if !is_running_output {
+                    continue;
+                }
+
+                let pid = match process.pid() {
+                    Ok(pid) => pid,
+                    Err(_) => continue,
+                };
+
+                let process_bundle_id = process.bundle_id().ok().map(|s| s.to_string());
+                let running_app = cidre::ns::RunningApp::with_pid(pid);
+                let running_app_bundle_id = running_app
+                    .as_ref()
+                    .and_then(|app| app.bundle_id().map(|s| s.to_string()));
+                let root_bundle_id = infer_root_bundle_id(
+                    process_bundle_id.as_deref(),
+                    running_app_bundle_id.as_deref(),
+                );
+                let display_name = running_app
+                    .and_then(|app| app.localized_name().map(|s| s.to_string()))
+                    .unwrap_or_else(|| {
+                        root_bundle_id
+                            .clone()
+                            .unwrap_or_else(|| format!("Process {}", pid))
+                    });
+
+                apps.push(SystemAudioSourceApp {
+                    display_name,
+                    root_bundle_id: root_bundle_id.clone(),
+                    process_bundle_id,
+                    pid,
+                    process_object_id: process.0.0,
+                    is_running_output,
+                    can_exclude: root_bundle_id.is_some(),
+                });
+            }
+            apps
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn infer_root_bundle_id(
+    process_bundle_id: Option<&str>,
+    running_app_bundle_id: Option<&str>,
+) -> Option<String> {
+    let candidate = running_app_bundle_id
+        .filter(|bundle_id| !bundle_id.is_empty())
+        .or_else(|| process_bundle_id.filter(|bundle_id| !bundle_id.is_empty()))?;
+
+    if let Some(helper_index) = candidate.find(".helper") {
+        return Some(candidate[..helper_index].to_string());
+    }
+
+    Some(candidate.to_string())
+}
+
+#[cfg(target_os = "macos")]
+pub fn resolve_excluded_process_object_ids(root_bundle_ids: &[String]) -> Vec<u32> {
+    let requested: Vec<&str> = root_bundle_ids
+        .iter()
+        .map(|bundle_id| bundle_id.trim())
+        .filter(|bundle_id| !bundle_id.is_empty())
+        .collect();
+
+    if requested.is_empty() {
+        return Vec::new();
+    }
+
+    let mut seen = HashSet::new();
+    let mut process_object_ids = Vec::new();
+
+    for source in list_system_audio_source_apps() {
+        if !source.is_running_output || !source.can_exclude {
+            continue;
+        }
+
+        let root_match = source
+            .root_bundle_id
+            .as_deref()
+            .map(|root| {
+                requested
+                    .iter()
+                    .any(|requested_root| root == *requested_root)
+            })
+            .unwrap_or(false);
+
+        let process_bundle_match = source
+            .process_bundle_id
+            .as_deref()
+            .map(|process_bundle| {
+                requested.iter().any(|requested_root| {
+                    process_bundle == *requested_root
+                        || process_bundle.starts_with(&format!("{}.", requested_root))
+                })
+            })
+            .unwrap_or(false);
+
+        if (root_match || process_bundle_match) && seen.insert(source.process_object_id) {
+            process_object_ids.push(source.process_object_id);
+        }
+    }
+
+    process_object_ids
+}
+
+#[cfg(target_os = "macos")]
 fn list_system_audio_using_apps() -> Vec<String> {
     match ca::System::processes() {
         Ok(processes) => {
@@ -376,6 +504,16 @@ fn list_system_audio_using_apps() -> Vec<String> {
         }
         Err(_) => Vec::new(),
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn list_system_audio_source_apps() -> Vec<SystemAudioSourceApp> {
+    Vec::new()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn resolve_excluded_process_object_ids(_root_bundle_ids: &[String]) -> Vec<u32> {
+    Vec::new()
 }
 
 // Stub implementation for non-macOS platforms

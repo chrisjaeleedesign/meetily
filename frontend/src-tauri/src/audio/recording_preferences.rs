@@ -11,6 +11,12 @@ use log::error;
 #[cfg(target_os = "macos")]
 use crate::audio::capture::AudioCaptureBackend;
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ExcludedSystemAudioApp {
+    pub root_bundle_id: String,
+    pub display_name: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RecordingPreferences {
     pub save_folder: PathBuf,
@@ -23,6 +29,8 @@ pub struct RecordingPreferences {
     #[cfg(target_os = "macos")]
     #[serde(default)]
     pub system_audio_backend: Option<String>,
+    #[serde(default)]
+    pub excluded_system_audio_apps: Vec<ExcludedSystemAudioApp>,
 }
 
 impl Default for RecordingPreferences {
@@ -35,6 +43,7 @@ impl Default for RecordingPreferences {
             preferred_system_device: None,
             #[cfg(target_os = "macos")]
             system_audio_backend: Some("coreaudio".to_string()),
+            excluded_system_audio_apps: Vec::new(),
         }
     }
 }
@@ -384,4 +393,3 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
         }])
     }
 }
-

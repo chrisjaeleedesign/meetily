@@ -3,6 +3,7 @@ use crate::audio::{
     start_system_audio_capture, list_system_audio_devices, check_system_audio_permissions,
     SystemAudioDetector, SystemAudioEvent, new_system_audio_callback
 };
+use crate::audio::system_detector::{list_system_audio_source_apps, SystemAudioSourceApp};
 use std::sync::{Arc, Mutex};
 use anyhow::Result;
 
@@ -26,6 +27,12 @@ pub async fn start_system_audio_capture_command() -> Result<String, String> {
 pub async fn list_system_audio_devices_command() -> Result<Vec<String>, String> {
     list_system_audio_devices()
         .map_err(|e| format!("Failed to list system audio devices: {}", e))
+}
+
+/// List currently audible apps that can be excluded from macOS system audio capture
+#[command]
+pub async fn list_system_audio_source_apps_command() -> Result<Vec<SystemAudioSourceApp>, String> {
+    Ok(list_system_audio_source_apps())
 }
 
 /// Check if the app has permission to access system audio

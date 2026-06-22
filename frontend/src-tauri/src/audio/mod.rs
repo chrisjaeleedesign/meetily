@@ -68,15 +68,15 @@ pub use capture::{
 // Export system audio detection functionality
 pub use system_detector::{
     SystemAudioDetector, SystemAudioEvent, SystemAudioCallback,
-    new_system_audio_callback
+    new_system_audio_callback, SystemAudioSourceApp
 };
 
 // Export system audio commands
 pub use system_audio_commands::{
     start_system_audio_capture_command, list_system_audio_devices_command,
-    check_system_audio_permissions_command, start_system_audio_monitoring,
-    stop_system_audio_monitoring, get_system_audio_monitoring_status,
-    init_system_audio_state
+    list_system_audio_source_apps_command, check_system_audio_permissions_command,
+    start_system_audio_monitoring, stop_system_audio_monitoring,
+    get_system_audio_monitoring_status, init_system_audio_state
 };
 
 // Export new simplified components
@@ -118,4 +118,3 @@ pub use decoder::{decode_audio_file, DecodedAudio};
 
 // Export audio constants
 pub use constants::AUDIO_EXTENSIONS;
-

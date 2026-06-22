@@ -60,9 +60,10 @@ impl Drop for ParakeetModel {
 
 impl ParakeetModel {
     pub fn new<P: AsRef<Path>>(model_dir: P, quantized: bool) -> Result<Self, ParakeetError> {
-        let encoder = Self::init_session(&model_dir, "encoder-model", None, quantized)?;
-        let decoder_joint = Self::init_session(&model_dir, "decoder_joint-model", None, quantized)?;
-        let preprocessor = Self::init_session(&model_dir, "nemo128", None, false)?;
+        let threads = Self::default_thread_count();
+        let encoder = Self::init_session(&model_dir, "encoder-model", Some(threads), quantized)?;
+        let decoder_joint = Self::init_session(&model_dir, "decoder_joint-model", Some(threads), quantized)?;
+        let preprocessor = Self::init_session(&model_dir, "nemo128", Some(threads), false)?;
 
         let (vocab, blank_idx) = Self::load_vocab(&model_dir)?;
         let vocab_size = vocab.len();
@@ -81,6 +82,12 @@ impl ParakeetModel {
             blank_idx,
             vocab_size,
         })
+    }
+
+    fn default_thread_count() -> usize {
+        std::thread::available_parallelism()
+            .map(|count| count.get().min(2))
+            .unwrap_or(2)
     }
 
     fn init_session<P: AsRef<Path>>(
