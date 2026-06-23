@@ -499,6 +499,21 @@ pub fn run() {
             })
             .expect("Failed to initialize database");
 
+            let app_handle_for_transcription_warmup = _app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                let _engine_lifecycle_guard = audio::common::acquire_engine_lifecycle_lock().await;
+
+                match audio::transcription::validate_transcription_model_ready(
+                    &app_handle_for_transcription_warmup,
+                )
+                .await
+                {
+                    Ok(()) => log::info!("Transcription model warmed for fast recording start"),
+                    Err(e) => log::warn!("Transcription model warmup skipped: {}", e),
+                }
+            });
+
             // Initialize bundled templates directory for dynamic template discovery
             log::info!("Initializing bundled templates directory...");
             if let Ok(resource_path) = _app.handle().path().resource_dir() {

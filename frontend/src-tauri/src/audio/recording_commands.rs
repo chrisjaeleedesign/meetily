@@ -61,6 +61,26 @@ pub struct TranscriptionStatus {
     pub last_activity_ms: u64,
 }
 
+fn emit_model_validation_error<R: Runtime>(app: &AppHandle<R>, validation_error: &str) {
+    let missing_model = validation_error.contains("No Parakeet models are available")
+        || validation_error.contains("No Whisper models are available")
+        || validation_error.contains("not downloaded");
+
+    let user_message = if missing_model {
+        "Recording cannot start: Please download a transcription model first."
+    } else if validation_error.contains("downloading") {
+        "Recording cannot start: Transcription model is still downloading. Please wait for the download to complete."
+    } else {
+        "Recording cannot start: Unable to initialize the transcription model."
+    };
+
+    let _ = app.emit("transcription-error", serde_json::json!({
+        "error": validation_error,
+        "userMessage": user_message,
+        "actionable": missing_model
+    }));
+}
+
 // ============================================================================
 // RECORDING COMMANDS
 // ============================================================================
@@ -93,15 +113,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     info!("🔍 Validating transcription model availability before starting recording...");
     if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
         error!("Model validation failed: {}", validation_error);
-
-        // Emit error event for frontend - actionable: false to show toast instead of modal
-        // (download progress is already shown in top-right toast)
-        let _ = app.emit("transcription-error", serde_json::json!({
-            "error": validation_error,
-            "userMessage": "Recording cannot start: Transcription model is still downloading. Please wait for the download to complete.",
-            "actionable": false
-        }));
-
+        emit_model_validation_error(&app, &validation_error);
         return Err(validation_error);
     }
     info!("✅ Transcription model validation passed");
@@ -348,15 +360,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     info!("🔍 Validating transcription model availability before starting recording...");
     if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
         error!("Model validation failed: {}", validation_error);
-
-        // Emit error event for frontend - actionable: false to show toast instead of modal
-        // (download progress is already shown in top-right toast)
-        let _ = app.emit("transcription-error", serde_json::json!({
-            "error": validation_error,
-            "userMessage": "Recording cannot start: Transcription model is still downloading. Please wait for the download to complete.",
-            "actionable": false
-        }));
-
+        emit_model_validation_error(&app, &validation_error);
         return Err(validation_error);
     }
     info!("✅ Transcription model validation passed");
@@ -628,96 +632,9 @@ pub async fn stop_recording<R: Runtime>(
         info!("ℹ️ No transcription task found to wait for");
     }
 
-    // Step 3: Now safely unload Whisper model after ALL chunks are processed
-    let _ = app.emit(
-        "recording-shutdown-progress",
-        serde_json::json!({
-            "stage": "unloading_model",
-            "message": "Unloading speech recognition model...",
-            "progress": 70
-        }),
-    );
+    info!("🧠 Keeping transcription model loaded for faster next recording start");
 
-    info!("🧠 All transcript chunks processed. Now safely unloading transcription model...");
-
-    // Determine which provider was used and unload the appropriate model (with timeout)
-    let config = match tokio::time::timeout(
-        tokio::time::Duration::from_secs(30), // 30 seconds max for DB operation
-        crate::api::api::api_get_transcript_config(
-            app.clone(),
-            app.clone().state(),
-            None,
-        )
-    )
-    .await
-    {
-        Ok(Ok(Some(config))) => Some(config.provider),
-        Ok(Ok(None)) => None,
-        Ok(Err(e)) => {
-            warn!("⚠️ Failed to get transcript config: {:?}", e);
-            None
-        }
-        Err(_) => {
-            warn!("⏱️ Transcript config timeout (30s), continuing shutdown");
-            None
-        }
-    };
-
-    match config.as_deref() {
-        Some("parakeet") => {
-            info!("🦜 Unloading Parakeet model...");
-            let engine_clone = {
-                let engine_guard = crate::parakeet_engine::commands::PARAKEET_ENGINE
-                    .lock()
-                    .unwrap();
-                engine_guard.as_ref().cloned()
-            };
-
-            if let Some(engine) = engine_clone {
-                let current_model = engine
-                    .get_current_model()
-                    .await
-                    .unwrap_or_else(|| "unknown".to_string());
-                info!("Current Parakeet model before unload: '{}'", current_model);
-
-                if engine.unload_model().await {
-                    info!("✅ Parakeet model '{}' unloaded successfully", current_model);
-                } else {
-                    warn!("⚠️ Failed to unload Parakeet model '{}'", current_model);
-                }
-            } else {
-                warn!("⚠️ No Parakeet engine found to unload model");
-            }
-        }
-        _ => {
-            // Default to Whisper
-            info!("🎤 Unloading Whisper model...");
-            let engine_clone = {
-                let engine_guard = crate::whisper_engine::commands::WHISPER_ENGINE
-                    .lock()
-                    .unwrap();
-                engine_guard.as_ref().cloned()
-            };
-
-            if let Some(engine) = engine_clone {
-                let current_model = engine
-                    .get_current_model()
-                    .await
-                    .unwrap_or_else(|| "unknown".to_string());
-                info!("Current Whisper model before unload: '{}'", current_model);
-
-                if engine.unload_model().await {
-                    info!("✅ Whisper model '{}' unloaded successfully", current_model);
-                } else {
-                    warn!("⚠️ Failed to unload Whisper model '{}'", current_model);
-                }
-            } else {
-                warn!("⚠️ No Whisper engine found to unload model");
-            }
-        }
-    }
-
-    // Step 3.5: Track meeting ended analytics with privacy-safe metadata
+    // Step 3: Track meeting ended analytics with privacy-safe metadata
     // Extract all data from manager BEFORE any async operations to avoid Send issues
     let analytics_data = if let Some(ref manager) = manager_for_cleanup {
         let state = manager.get_state();
@@ -757,7 +674,7 @@ pub async fn stop_recording<R: Runtime>(
             }
         }
 
-        // Get transcription model info (already loaded above for model unload)
+        // Get transcription model info for analytics
         let transcription_config = match crate::api::api::api_get_transcript_config(
             app.clone(),
             app.clone().state(),

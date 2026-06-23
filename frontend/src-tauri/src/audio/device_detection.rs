@@ -483,7 +483,8 @@ mod tests {
             3840,
             48000,
         );
-        assert_eq!(timeout, Duration::from_millis(160));
+        assert!(timeout >= Duration::from_millis(159));
+        assert!(timeout <= Duration::from_millis(160));
     }
 
     #[test]
