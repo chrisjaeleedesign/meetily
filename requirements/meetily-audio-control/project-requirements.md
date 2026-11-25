@@ -20,7 +20,7 @@ Let a user hear music from the native Spotify app while Meetily records a meetin
 - Source exclusion: a saved setting that prevents selected native macOS apps from contributing audio to Meetily's system-audio capture.
 - Native app: a macOS application with a stable bundle identifier, such as Spotify's `com.spotify.client`.
 - Meeting app: the app producing the audio the user wants Meetily to capture, such as Zoom, Google Meet in a browser, or Teams.
-- Misc install: Meetily-owned app bundles, app data, model files, recordings, installers, source/build outputs, package caches, and local toolchain state live under `/Volumes/Misc`, with only small compatibility symlinks on the internal drive.
+- External-drive install: Meetily-owned app bundles, app data, model files, recordings, installers, source/build outputs, package caches, and local toolchain state live under `/Volumes/main` (external drive), with only small compatibility symlinks on the internal drive.
 
 ### Current Assumptions
 
@@ -32,7 +32,7 @@ Let a user hear music from the native Spotify app while Meetily records a meetin
 - Apple's Core Audio tap APIs include global tap descriptions that can exclude processes.
 - The pinned `cidre` wrapper exposes the needed V1 primitives: Core Audio process listing, process object IDs, process bundle IDs, process output state, and mono global tap exclusion by process object ID.
 - A local development proof requires a Rust/Cargo toolchain; `cargo` was not available on this machine during requirements exploration.
-- The user's storage requirement is that Meetily-owned install and implementation artifacts should live on `/Volumes/Misc`, not the main Mac mini drive.
+- The user's storage requirement is that Meetily-owned install and implementation artifacts should live on `/Volumes/main` (external drive), not the main Mac mini drive.
 - Existing system-provided developer tools, such as Xcode or Command Line Tools, may remain in their normal system locations; do not duplicate or move Apple-managed tools just for this project.
 
 ### Current Postulates
@@ -42,10 +42,10 @@ Let a user hear music from the native Spotify app while Meetily records a meetin
 - Treat a selected app as an app bundle family where practical, but the current live Spotify proof only required excluding the exact `com.spotify.client` Core Audio process object.
 - Apply exclusions only to system audio. Microphone capture must not be affected.
 - Default behavior must remain unchanged when no exclusions are configured.
-- Store the installed app at `/Volumes/Misc/Applications/meetily.app`.
-- Store Meetily runtime data at `/Volumes/Misc/Meetily/AppData/com.meetily.ai`, with `~/Library/Application Support/com.meetily.ai` as a symlink only.
-- Store recordings at `/Volumes/Misc/Meetily/Recordings`.
-- Store installers, local source checkout/build workspace, dependency caches, and optional Rust/Cargo toolchain state under `/Volumes/Misc/Meetily/`.
+- Store the installed app at `/Volumes/main/AppData/Meetily/Applications/meetily.app`.
+- Store Meetily runtime data at `/Volumes/main/AppData/Meetily/AppData/com.meetily.ai`, with `~/Library/Application Support/com.meetily.ai` as a symlink only.
+- Store recordings at `/Volumes/main/AppData/Meetily/Recordings`.
+- Keep the source checkout at `/Volumes/main/Documents/projects/meetily`, with installers, build output, dependency caches, and optional Rust/Cargo toolchain state in its Git-excluded `.local/` folder.
 
 ### Scope Summary
 
@@ -62,12 +62,12 @@ V1 implementation must also preserve the Misc-backed install posture: no large M
 - `REQ-001` is specific enough for `/goal implement this`.
 - Important non-scope is explicit, especially browser tabs and dynamic mid-recording changes.
 - The implementation can be verified with native Spotify playing while a separate meeting/audio source remains captured and transcribed.
-- The installed/tested app, app data, recordings, and implementation/build artifacts are on `/Volumes/Misc`, with internal-drive paths limited to symlinks or existing system tools.
+- The installed/tested app, app data, recordings, and implementation/build artifacts are on `/Volumes/main` (external drive), with internal-drive paths limited to symlinks or existing system tools.
 
 ### Open Questions
 
 - None blocking. The V1 UI should show saved excluded apps plus currently-audible apps.
-- If `cargo` is absent during implementation, the implementation goal should install or locate a Rust toolchain with `RUSTUP_HOME` and `CARGO_HOME` under `/Volumes/Misc/Meetily/DevTools`; if that is not possible, source changes may still be completed but build proof must be marked blocked.
+- If `cargo` is absent during implementation, the implementation goal should install or locate a Rust toolchain with `RUSTUP_HOME` and `CARGO_HOME` under the source checkout's `.local/DevTools`; if that is not possible, source changes may still be completed but build proof must be marked blocked.
 
 ## Backlog
 
